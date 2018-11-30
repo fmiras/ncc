@@ -5,6 +5,8 @@ const MagicString = require('magic-string');
 const { attachScopes } = require('rollup-pluginutils');
 const evaluate = require('static-eval');
 const acorn = require('acorn');
+const getUniqueAssetName = require('../utils/dedupe-names');
+const { getOptions } = require('loader-utils');
 
 // Very basic first-pass fs.readFileSync inlining
 function isReference(node, parent) {
@@ -29,20 +31,16 @@ module.exports = function (code) {
   if (id.endsWith('.json') || !code.match(assetRegEx))
     return this.callback(null, code);
 
-  const assetNames = Object.create(null);
+  const options = getOptions(this);
   const emitAsset = (assetPath) => {
     // JS assets to support require(assetPath) and not fs-based handling
     // NB package.json is ambiguous here...
     if (assetPath.endsWith('.js') || assetPath.endsWith('.mjs'))
       return;
 
+    const name = getUniqueAssetName(assetPath, options.assetNames);
+
     // console.log('Emitting ' + assetPath + ' for module ' + id);
-    const basename = path.basename(assetPath);
-    const ext = path.extname(basename);
-    let name = basename, i = 0;
-    while (name in assetNames && assetNames[name] !== assetPath)
-      name = basename.substr(0, basename.length - ext.length) + ++i + ext;
-    assetNames[name] = assetPath;
 
     this.emitFile(name, fs.readFileSync(assetPath));
     return "__dirname + '/" + JSON.stringify(name).slice(1, -1) + "'";
@@ -148,7 +146,7 @@ module.exports = function (code) {
       // detect asset leaf expression triggers (if not already)
       // __dirname and __filename only currently
       // Can add require.resolve, import.meta.url, even path-like environment variables
-      if (node.type === 'Identifier' && isReference(node, parent)) {
+      else if (node.type === 'Identifier' && isReference(node, parent)) {
         if (!shadowDepths[node.name] &&
             (node.name === '__dirname' || node.name === '__filename')) {
           curStaticValue = computeStaticValue(node, id);
@@ -164,7 +162,7 @@ module.exports = function (code) {
       // so "var { join } = require('path')" will only detect in the top scope.
       // Intermediate scope handling for these requires is straightforward, but
       // would need nested shadow depth handling of the pathIds.
-      if (parent === ast && node.type === 'VariableDeclaration') {
+      else if (parent === ast && node.type === 'VariableDeclaration') {
         for (const decl of node.declarations) {
           // var path = require('path')
           if (decl.id.type === 'Identifier' &&
